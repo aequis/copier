@@ -1,5 +1,5 @@
 # src/copier/coordinator.py
-from typing import Optional, List, Dict
+from typing import Any, Optional, List, Dict
 
 # Import QObject from the correct Qt binding (handle potential PySide6/PyQt6 difference)
 try:
@@ -205,7 +205,7 @@ class AppCoordinator(QObject):
                  # Keep resume state in case user wants to retry/resume failed items
 
     @Slot(dict)
-    def _handle_progress_updated(self, progress_data: Dict[str, any]) -> None:
+    def _handle_progress_updated(self, progress_data: Dict[str, Any]) -> None:
         """Handles progress updates from the controller."""
         # Update the progress details in AppState
         self.app_state.update_progress(progress_data)
