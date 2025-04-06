@@ -10,7 +10,7 @@ from PySide6.QtGui import QDragEnterEvent, QDropEvent, QPalette, QColor
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QLineEdit, QListWidget, QPushButton, QTextEdit, QScrollArea,
-    QListWidgetItem, QAbstractItemView
+    QListWidgetItem, QAbstractItemView, QCheckBox, QGridLayout # Added QCheckBox, QGridLayout
 )
 
 class DropLineEdit(QLineEdit):
@@ -99,7 +99,7 @@ class GuiManager(QWidget):
     remove_sources_clicked = Signal(list) # Emits list of selected source strings
     sources_dropped = Signal(list)      # Emits list of dropped source paths
     destination_dropped = Signal(str)   # Emits the dropped destination path
-
+    # No signal needed for options changed, controller will query on run
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setWindowTitle("Copier")
@@ -126,6 +126,40 @@ class GuiManager(QWidget):
         dest_layout.addWidget(self.destination_line_edit)
         dest_group.setLayout(dest_layout)
 
+        # --- Rsync Options ---
+        options_group = QGroupBox("Rsync Options")
+        options_layout = QGridLayout() # Use grid for better alignment
+        self.option_archive_checkbox = QCheckBox("Archive (-a)")
+        self.option_verbose_checkbox = QCheckBox("Verbose (-v)")
+        self.option_compress_checkbox = QCheckBox("Compress (-z)")
+        self.option_human_checkbox = QCheckBox("Human-readable (-h)")
+        self.option_progress_checkbox = QCheckBox("Show Progress (--progress)")
+        self.option_delete_checkbox = QCheckBox("Delete extraneous files (--delete)")
+        self.option_dryrun_checkbox = QCheckBox("Dry Run (-n)")
+        self.option_perms_checkbox = QCheckBox("Preserve Permissions (-pgo)") # Added
+
+        # Set default states (adjust as needed)
+        self.option_archive_checkbox.setChecked(True)
+        self.option_verbose_checkbox.setChecked(True)
+        self.option_human_checkbox.setChecked(True)
+        self.option_progress_checkbox.setChecked(True)
+        self.option_compress_checkbox.setChecked(False) # Often good on slow links
+        self.option_delete_checkbox.setChecked(False) # Dangerous, default off
+        self.option_dryrun_checkbox.setChecked(False)
+        self.option_perms_checkbox.setChecked(True) # Default to preserving perms if archive is off
+
+        # Add checkboxes to grid layout
+        options_layout.addWidget(self.option_archive_checkbox, 0, 0)
+        options_layout.addWidget(self.option_verbose_checkbox, 1, 0)
+        options_layout.addWidget(self.option_compress_checkbox, 2, 0)
+        options_layout.addWidget(self.option_human_checkbox, 0, 1)
+        options_layout.addWidget(self.option_progress_checkbox, 1, 1)
+        options_layout.addWidget(self.option_delete_checkbox, 2, 1)
+        options_layout.addWidget(self.option_dryrun_checkbox, 0, 2)
+        options_layout.addWidget(self.option_perms_checkbox, 1, 2) # Added to grid
+        options_layout.setColumnStretch(3, 1) # Add stretch to push cols left
+        options_group.setLayout(options_layout)
+
         # --- Controls ---
         control_group = QGroupBox("Controls")
         control_layout = QHBoxLayout()
@@ -144,16 +178,13 @@ class GuiManager(QWidget):
         log_layout = QVBoxLayout()
         self.log_text_edit = QTextEdit()
         self.log_text_edit.setReadOnly(True)
-        # Optional: Add scroll area if needed, though QTextEdit handles scrolling
-        # log_scroll = QScrollArea()
-        # log_scroll.setWidgetResizable(True)
-        # log_scroll.setWidget(self.log_text_edit)
         log_layout.addWidget(self.log_text_edit)
         log_group.setLayout(log_layout)
 
         # --- Add groups to main layout ---
         main_layout.addWidget(source_group)
         main_layout.addWidget(dest_group)
+        main_layout.addWidget(options_group) # Add the new options group
         main_layout.addWidget(control_group)
         main_layout.addWidget(log_group)
 
@@ -294,6 +325,19 @@ class GuiManager(QWidget):
         """Clears the status log."""
         self.log_text_edit.clear()
 
+    def get_rsync_options(self) -> dict[str, bool]:
+        """Returns a dictionary of the current rsync option checkbox states."""
+        return {
+            "archive": self.option_archive_checkbox.isChecked(),
+            "verbose": self.option_verbose_checkbox.isChecked(),
+            "compress": self.option_compress_checkbox.isChecked(),
+            "human": self.option_human_checkbox.isChecked(),
+            "progress": self.option_progress_checkbox.isChecked(),
+            "delete": self.option_delete_checkbox.isChecked(),
+            "dry_run": self.option_dryrun_checkbox.isChecked(),
+            "preserve_permissions": self.option_perms_checkbox.isChecked(), # Added
+        }
+
 # Example usage (for testing purposes, not part of the final app structure)
 if __name__ == '__main__':
     app = QApplication(sys.argv)
@@ -301,11 +345,12 @@ if __name__ == '__main__':
 
     # --- Example Signal Connections (for testing) ---
     def on_run_resume():
-        gui.update_log("info", "Run/Resume Clicked!")
+        options = gui.get_rsync_options()
+        gui.update_log("info", f"Run/Resume Clicked! Options: {options}")
         # Simulate running state
-        gui.set_button_states(running=True, can_resume=False)
+        gui.set_button_states(running=True, can_resume_and_runnable=False) # Adjusted call
         # Simulate completion after delay
-        QtCore.QTimer.singleShot(3000, lambda: gui.set_button_states(running=False, can_resume=False))
+        QtCore.QTimer.singleShot(3000, lambda: gui.set_button_states(running=False, can_resume_and_runnable=False)) # Adjusted call
         QtCore.QTimer.singleShot(1000, lambda: gui.update_log("progress", "Doing step 1..."))
         QtCore.QTimer.singleShot(2000, lambda: gui.update_log("progress", "Doing step 2..."))
         QtCore.QTimer.singleShot(3000, lambda: gui.update_log("success", "Finished!"))
@@ -313,7 +358,7 @@ if __name__ == '__main__':
 
     def on_interrupt():
         gui.update_log("warning", "Interrupt Clicked!")
-        gui.set_button_states(running=False, can_resume=True) # Example: Go to paused state
+        gui.set_button_states(running=False, can_resume_and_runnable=True) # Example: Go to paused state, Adjusted call
 
     def on_exit():
         gui.update_log("info", "Exit Clicked!")

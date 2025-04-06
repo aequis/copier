@@ -251,13 +251,58 @@ class RsyncController(QObject):
         # Reset was_interrupted state in StateManager as we are now starting/resuming
         self.state_manager.was_interrupted = False # Explicitly reset interrupt flag for the new run
 
+        # --- Construct final rsync command options ---
+        selected_options = self.gui.get_rsync_options()
+        final_rsync_command = ["rsync"]
+
+        if selected_options["archive"]:
+            final_rsync_command.append("-a") # Archive implies -rlptgoD, including permissions
+            # Note: If -a is checked, the "preserve_permissions" checkbox is effectively ignored
+            # because -a forces permission preservation. We could disable the perms checkbox
+            # when archive is checked in the GUI for clarity, but this logic works.
+        else:
+            # Build flags individually if archive is off
+            final_rsync_command.extend(["-rltD"]) # Base flags: Recursive, links, times, devices/specials
+            if selected_options["preserve_permissions"]:
+                final_rsync_command.extend(["-pgo"]) # Add permissions, group, owner
+            # Add other time flags (these might be redundant with -t in -rltD but explicit doesn't hurt)
+            final_rsync_command.extend(["--atimes", "--crtimes", "--omit-dir-times"])
+
+        if selected_options["verbose"]:
+            final_rsync_command.append("-v")
+
+        if selected_options["compress"]:
+            final_rsync_command.append("-z")
+
+        if selected_options["human"]:
+            final_rsync_command.append("-h")
+
+        if selected_options["progress"]:
+            final_rsync_command.append("--progress")
+        else:
+            # Use info=progress2 if --progress is not selected (similar to original base)
+            final_rsync_command.append("--info=progress2")
+
+        if selected_options["delete"]:
+            final_rsync_command.append("--delete")
+
+        if selected_options["dry_run"]:
+            final_rsync_command.append("-n")
+
+        # Remove duplicates just in case (e.g., if -a and -v are added)
+        # Note: Order might matter for some flags, but this simple approach should be okay here.
+        # A more robust way might be needed if complex flag interactions arise.
+        final_rsync_command = list(dict.fromkeys(final_rsync_command)) # Simple deduplication preserving order
+
+        self.log("info", f"Using effective rsync options: {' '.join(final_rsync_command[1:])}") # Log options excluding 'rsync' itself
+
         # Create and start the runner
         self.runner = RsyncRunner(self.log_queue)
         self.runner.run_all(
             sources=self.source_paths,
             destination=self.destination_path, # type: ignore (already checked it's not None)
             start_index=start_index,
-            base_command=RSYNC_BASE_COMMAND
+            base_command=final_rsync_command # Pass the dynamically constructed command
         )
 
         self._update_gui_state() # Update buttons immediately
