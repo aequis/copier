@@ -27,9 +27,14 @@ class GuiManager(QWidget):
     remove_sources_clicked = Signal(list) # Emits list of selected source strings
     sources_dropped = Signal(list)      # Emits list of dropped source paths
     destination_dropped = Signal(str)   # Emits the dropped destination path
-    # No signal needed for options changed, controller will query on run
-    def __init__(self, parent: Optional[QWidget] = None):
+    options_changed = Signal(dict)      # Emits the current options dictionary when any checkbox changes
+    # Add AppState dependency
+    # Add import for AppStatus and AppState
+    from copier.state_manager import AppStatus, AppState
+
+    def __init__(self, app_state: AppState, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self._app_state = app_state # Store the AppState instance
         self.setWindowTitle("Copier")
         self._setup_ui()
         self._connect_signals()
@@ -129,6 +134,16 @@ class GuiManager(QWidget):
         self.source_list_widget.items_dropped.connect(self.sources_dropped)
         self.destination_line_edit.dropped.connect(self.destination_dropped)
 
+        # Connect checkbox state changes to the options changed emitter
+        self.option_archive_checkbox.stateChanged.connect(self._emit_options_changed)
+        self.option_verbose_checkbox.stateChanged.connect(self._emit_options_changed)
+        self.option_compress_checkbox.stateChanged.connect(self._emit_options_changed)
+        self.option_human_checkbox.stateChanged.connect(self._emit_options_changed)
+        self.option_progress_checkbox.stateChanged.connect(self._emit_options_changed)
+        self.option_delete_checkbox.stateChanged.connect(self._emit_options_changed)
+        self.option_dryrun_checkbox.stateChanged.connect(self._emit_options_changed)
+        self.option_perms_checkbox.stateChanged.connect(self._emit_options_changed)
+
     # --- Internal Signal Emitters ---
     @Slot()
     def _emit_run_resume(self) -> None:
@@ -164,6 +179,12 @@ class GuiManager(QWidget):
         if items_to_remove_text:
             self.remove_sources_clicked.emit(items_to_remove_text)
 
+    @Slot()
+    def _emit_options_changed(self) -> None:
+        """Gathers current options and emits the options_changed signal."""
+        current_options = self.get_rsync_options()
+        self.options_changed.emit(current_options)
+
     # --- Public Slots / Methods ---
     @Slot(str, str)
     def update_log(self, level: str, message: str) -> None:
@@ -180,50 +201,7 @@ class GuiManager(QWidget):
         formatted_message = f'<font color="{color}">[{level.upper()}] {message}</font>'
         self.log_text_edit.append(formatted_message) # append handles newline
 
-    @Slot(bool, bool)
-    def set_button_states(self, running: bool, can_resume_and_runnable: bool) -> None:
-        """
-        Sets the enabled state and text of control buttons based on runner status
-        and whether conditions are met to run/resume.
-
-        Args:
-            running: True if the RsyncRunner thread is active.
-            can_resume_and_runnable: True if the state allows resuming AND basic run conditions are met.
-                                     If running is False, this determines if "Resume" or "Run" is shown/enabled.
-        """
-        # Basic check if sources and destination are set in the GUI
-        has_sources = self.source_list_widget.count() > 0
-        has_destination = bool(self.destination_line_edit.text())
-        can_start_fresh = has_sources and has_destination
-
-        if running:
-            self.run_resume_button.setText("Running...")
-            self.run_resume_button.setEnabled(False)
-            self.interrupt_button.setEnabled(True)
-            self.remove_source_button.setEnabled(False)
-            self.source_list_widget.setEnabled(False)
-            self.destination_line_edit.setEnabled(False) # Disable editing dest while running
-            # Keep destination line edit visually enabled but read-only maybe?
-            # self.destination_line_edit.setReadOnly(True) # Already read-only by default design
-        elif can_resume_and_runnable: # Not running, but can resume
-            self.run_resume_button.setText("Resume")
-            self.run_resume_button.setEnabled(True)
-            self.interrupt_button.setEnabled(False) # Cannot interrupt when not running
-            self.remove_source_button.setEnabled(True) # Allow changes when paused/resumable
-            self.source_list_widget.setEnabled(True)
-            self.destination_line_edit.setEnabled(True) # Allow changing dest when paused/resumable
-        else: # Idle state, cannot resume (or conditions not met for resume)
-            self.run_resume_button.setText("Run")
-            # Only enable Run if sources and destination are actually set
-            self.run_resume_button.setEnabled(can_start_fresh)
-            self.interrupt_button.setEnabled(False)
-            self.remove_source_button.setEnabled(True)
-            self.source_list_widget.setEnabled(True)
-            self.destination_line_edit.setEnabled(True)
-
-        # Exit button is always enabled unless specifically handled elsewhere
-        # self.exit_button.setEnabled(not running) # Example if needed
-
+    # Removed set_button_states method - functionality moved to update_ui_from_state
     @Slot(list)
     def set_source_list(self, items: list[str]) -> None:
         """Clears and repopulates the source list widget."""
@@ -259,62 +237,84 @@ class GuiManager(QWidget):
             "archive": self.option_archive_checkbox.isChecked(),
             "verbose": self.option_verbose_checkbox.isChecked(),
             "compress": self.option_compress_checkbox.isChecked(),
-            "human": self.option_human_checkbox.isChecked(),
+            "human_readable": self.option_human_checkbox.isChecked(), # Changed key from "human"
             "progress": self.option_progress_checkbox.isChecked(),
             "delete": self.option_delete_checkbox.isChecked(),
             "dry_run": self.option_dryrun_checkbox.isChecked(),
             "preserve_permissions": self.option_perms_checkbox.isChecked(), # Added
         }
 
-# Example usage (for testing purposes, not part of the final app structure)
-if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    gui = GuiManager()
+    @Slot()
+    def update_ui_from_state(self) -> None:
+        """Updates all relevant UI elements based on the current AppState."""
+        state = self._app_state # Get the current state
 
-    # --- Example Signal Connections (for testing) ---
-    def on_run_resume():
-        options = gui.get_rsync_options()
-        gui.update_log("info", f"Run/Resume Clicked! Options: {options}")
-        # Simulate running state
-        gui.set_button_states(running=True, can_resume_and_runnable=False) # Adjusted call
-        # Simulate completion after delay
-        QtCore.QTimer.singleShot(3000, lambda: gui.set_button_states(running=False, can_resume_and_runnable=False)) # Adjusted call
-        QtCore.QTimer.singleShot(1000, lambda: gui.update_log("progress", "Doing step 1..."))
-        QtCore.QTimer.singleShot(2000, lambda: gui.update_log("progress", "Doing step 2..."))
-        QtCore.QTimer.singleShot(3000, lambda: gui.update_log("success", "Finished!"))
+        # --- Update Source List ---
+        # Avoid clearing/re-adding if the list hasn't actually changed
+        current_gui_sources = self.get_all_sources()
+        if current_gui_sources != state.sources:
+            self.set_source_list(state.sources) # Use existing method
+
+        # --- Update Destination ---
+        if self.destination_line_edit.text() != (state.destination or ""):
+            self.destination_line_edit.setText(state.destination or "")
+
+        # --- Update Options Checkboxes ---
+        # Note: Key names here should align with AppState._options keys
+        self.option_archive_checkbox.setChecked(state.options.get("archive", False))
+        self.option_verbose_checkbox.setChecked(state.options.get("verbose", False))
+        self.option_compress_checkbox.setChecked(state.options.get("compress", False))
+        self.option_human_checkbox.setChecked(state.options.get("human_readable", False))
+        self.option_progress_checkbox.setChecked(state.options.get("progress", False))
+        self.option_delete_checkbox.setChecked(state.options.get("delete", False))
+        # Assuming these keys exist in AppState or default to False if missing
+        # TODO: Ensure AppState._options includes 'dry_run' and 'preserve_permissions' or handle missing keys
+        self.option_dryrun_checkbox.setChecked(state.options.get("dry_run", False))
+        self.option_perms_checkbox.setChecked(state.options.get("preserve_permissions", False))
 
 
-    def on_interrupt():
-        gui.update_log("warning", "Interrupt Clicked!")
-        gui.set_button_states(running=False, can_resume_and_runnable=True) # Example: Go to paused state, Adjusted call
+        # --- Update Control Buttons and Widget Enabled States ---
+        status = state.status
+        is_running = status in [self.AppStatus.RUNNING, self.AppStatus.INTERRUPTING]
+        can_run = state.can_run_or_resume()
+        can_resume = state.can_resume()
 
-    def on_exit():
-        gui.update_log("info", "Exit Clicked!")
-        app.quit()
+        # Enable/disable input widgets based on running state
+        inputs_enabled = not is_running
+        self.source_list_widget.setEnabled(inputs_enabled)
+        self.remove_source_button.setEnabled(inputs_enabled)
+        self.destination_line_edit.setEnabled(inputs_enabled)
+        # Enable/disable options groupbox might be simpler?
+        # TODO: Store options_group as self.options_group in _setup_ui if desired
+        # Let's disable individual checkboxes for now
+        self.option_archive_checkbox.setEnabled(inputs_enabled)
+        self.option_verbose_checkbox.setEnabled(inputs_enabled)
+        self.option_compress_checkbox.setEnabled(inputs_enabled)
+        self.option_human_checkbox.setEnabled(inputs_enabled)
+        self.option_progress_checkbox.setEnabled(inputs_enabled)
+        self.option_delete_checkbox.setEnabled(inputs_enabled)
+        self.option_dryrun_checkbox.setEnabled(inputs_enabled)
+        self.option_perms_checkbox.setEnabled(inputs_enabled)
 
-    def on_remove_sources(sources: list[str]):
-        gui.update_log("info", f"Remove Sources Clicked: {sources}")
 
-    def on_sources_dropped(sources: list[str]):
-        gui.update_log("info", f"Sources Dropped: {sources}")
+        # Update Run/Resume button
+        if is_running:
+            self.run_resume_button.setText("Running...")
+            self.run_resume_button.setEnabled(False)
+        elif can_resume and can_run: # Check both resume possibility and general run conditions
+             self.run_resume_button.setText("Resume")
+             self.run_resume_button.setEnabled(True)
+        else: # Idle or finished state
+             self.run_resume_button.setText("Run")
+             self.run_resume_button.setEnabled(can_run) # Enable only if basic conditions met
 
-    def on_destination_dropped(dest: str):
-        gui.update_log("info", f"Destination Dropped: {dest}")
-        gui.set_destination(dest) # Update the display as well
+        # Update Interrupt button
+        self.interrupt_button.setEnabled(is_running)
 
-    gui.run_resume_clicked.connect(on_run_resume)
-    gui.interrupt_clicked.connect(on_interrupt)
-    gui.exit_clicked.connect(on_exit)
-    gui.remove_sources_clicked.connect(on_remove_sources)
-    gui.sources_dropped.connect(on_sources_dropped)
-    gui.destination_dropped.connect(on_destination_dropped)
+        # Update window title with status? Optional.
+        # self.setWindowTitle(f"Copier - {status.name}")
 
-    # --- Example Method Calls (for testing) ---
-    gui.set_source_list(["/initial/source1", "/initial/source2"])
-    gui.set_destination("/initial/destination")
-    gui.update_log("info", "GUI Initialized.")
-    gui.update_log("warning", "This is a warning.")
-    gui.update_log("error", "This is an error.")
+        # Note: This replaces the logic previously in set_button_states
+        # We might remove set_button_states later.
 
-    gui.show()
-    sys.exit(app.exec())
+# Removed __main__ block - testing should be done via unit tests or running the full app

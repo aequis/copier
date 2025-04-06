@@ -9,36 +9,46 @@ from PySide6 import QtCore
 from PySide6.QtCore import QObject, Signal, Slot, QTimer, QRunnable, QThreadPool
 from PySide6.QtWidgets import QApplication # For quit
 
-from copier.gui.manager import GuiManager
+# from copier.gui.manager import GuiManager # Removed
 from copier.rsync.runner import RsyncRunner
-from copier.state_manager import StateManager
+# Import AppState instead of StateManager
+from copier.state_manager import AppState
 from copier.config import RSYNC_BASE_COMMAND
 
 class RsyncController(QObject):
     """
     Connects the GuiManager (View) to the RsyncRunner and StateManager (Model/Logic).
     """
-    log_signal = Signal(str, str) # level, message
-    update_gui_state_signal = Signal(bool, bool) # running, can_resume
+    # Signals emitted by the controller
+    log_signal = Signal(str, str)           # level, message
+    rsync_finished = Signal(bool)           # success: True/False
+    progress_updated = Signal(dict)         # Dictionary with progress details
+    rsync_availability_checked = Signal(bool) # Emitted after checking rsync
 
-    def __init__(self, gui: GuiManager, parent: Optional[QObject] = None):
+    # Add AppState dependency, keep gui for now
+    # Remove gui dependency
+    def __init__(self, app_state: AppState, parent: Optional[QObject] = None):
         super().__init__(parent)
-        self.gui = gui
-        self.state_manager = StateManager()
+        self._app_state = app_state # Store the AppState instance
+        # self.gui = gui # No longer needed
         self.runner: Optional[RsyncRunner] = None
         self.log_queue: queue.Queue[Tuple[str, Any]] = queue.Queue()
-        self.source_paths: List[str] = []
-        self.destination_path: Optional[str] = None
-        self._rsync_available: bool = False # Track rsync availability
+        # Remove internal state variables - read from AppState instead
+        # self.source_paths: List[str] = []
+        # self.destination_path: Optional[str] = None
+        # self._rsync_available: bool = False
 
         # Timer to process the log queue from RsyncRunner
         self.log_timer = QTimer(self)
         self.log_timer.timeout.connect(self.process_log_queue)
         self.log_timer.setInterval(100) # Check queue every 100ms
 
-        self._connect_gui_signals()
-        self.log_signal.connect(self.gui.update_log) # Connect internal log signal to GUI
-        self.update_gui_state_signal.connect(self.gui.set_button_states) # Connect state signal
+        # Remove GUI signal connections - handled by Coordinator
+        # self._connect_gui_signals()
+        # Remove direct log connection - handled by Coordinator
+        # self.log_signal.connect(self.gui.update_log)
+        # Remove direct connection to gui.set_button_states
+        # self.update_gui_state_signal.connect(self.gui.set_button_states)
 
         self.log("info", "Controller initialized.")
         self.log("info", f"Using base command options: {' '.join(RSYNC_BASE_COMMAND)}")
@@ -51,20 +61,10 @@ class RsyncController(QObject):
         # (though in this design, most logs originate from the controller or queue processor)
         self.log_signal.emit(level, message)
 
-    def _connect_gui_signals(self) -> None:
-        """Connect signals from the GuiManager to controller slots."""
-        self.gui.run_resume_clicked.connect(self.start_or_resume_rsync)
-        self.gui.interrupt_clicked.connect(self.request_interrupt)
-        self.gui.exit_clicked.connect(self.quit_app)
-        self.gui.remove_sources_clicked.connect(self.handle_remove_sources)
-        self.gui.sources_dropped.connect(self.handle_sources_dropped)
-        self.gui.destination_dropped.connect(self.handle_destination_dropped)
-        # Connect the main window's close event if needed (requires passing main window ref)
-        # self.gui.parent().closeEvent = self.closeEvent # Example
-
+    # Remove _connect_gui_signals method
     def check_rsync_availability(self) -> None:
         """Checks if the rsync command is available."""
-        self._rsync_available = False # Assume not available initially
+        rsync_found = False # Local variable for the check
         try:
             # Add common Git paths on Windows if needed (similar to old main block)
             if sys.platform == "win32":
@@ -75,7 +75,7 @@ class RsyncController(QObject):
             creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
             subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=5, creationflags=creationflags)
             self.log("success", "rsync command found.")
-            self._rsync_available = True
+            rsync_found = True
         except FileNotFoundError:
             self.log("error", "ERROR: 'rsync' command not found in PATH. Please install rsync.")
         except subprocess.CalledProcessError as e:
@@ -85,7 +85,8 @@ class RsyncController(QObject):
         except Exception as e:
             self.log("error", f"An unexpected error occurred while checking for rsync: {e}")
         finally:
-            self._update_gui_state() # Update buttons based on check result
+            # Emit signal instead of calling _update_gui_state directly
+            self.rsync_availability_checked.emit(rsync_found)
 
     def _add_git_to_path_windows(self) -> None:
         """Adds Git bin directory to PATH on Windows if found and not already present."""
@@ -115,144 +116,46 @@ class RsyncController(QObject):
                          self.log("warning", "rsync still not found after adding Git path.")
                      break # Found one
 
-    @Slot(str)
-    def handle_destination_dropped(self, path: str) -> None:
-        """Handles the destination path being set via drag and drop."""
-        is_valid_dest = False
-        path = os.path.normpath(path) # Normalize path separators
-        if os.path.exists(path):
-            if os.path.isdir(path):
-                is_valid_dest = True
-            else:
-                self.log("error", f"Destination must be a directory: {path}")
-        else:
-            # Allow non-existent destination, rsync can create it
-            is_valid_dest = True
-            # Check parent dir?
-            parent_dir = os.path.dirname(path)
-            if parent_dir and not os.path.exists(parent_dir):
-                 self.log("warning", f"Destination parent directory does not exist: {parent_dir}")
-                 # Allow proceeding, rsync might handle it or fail
+    # Remove GUI handler slots - Coordinator handles these by updating AppState
+    # @Slot(str)
+    # def handle_destination_dropped(self, path: str) -> None: ...
+    # @Slot(list)
+    # def handle_sources_dropped(self, dropped_paths: List[str]) -> None: ...
+    # @Slot(list)
+    # def handle_remove_sources(self, items_to_remove: List[str]) -> None: ...
 
-        if is_valid_dest:
-            self.destination_path = path
-            self.gui.set_destination(path) # Update GUI display
-            self.log("info", f"Destination set: {path}")
-            self._update_gui_state() # Update button states if needed
+    # Remove _can_run_or_resume method - logic moved to Coordinator/AppState
 
-    @Slot(list)
-    def handle_sources_dropped(self, dropped_paths: List[str]) -> None:
-        """Handles source files/folders being dropped onto the list."""
-        added_count = 0
-        list_changed = False
-        current_sources_in_gui = set(self.gui.get_all_sources())
-
-        for path in dropped_paths:
-            path = os.path.normpath(path) # Normalize path separators
-            if not os.path.exists(path):
-                self.log("warning", f"Skipped invalid source path: {path}")
-                continue
-            # Check against internal list AND GUI list to be safe
-            if path in self.source_paths or path in current_sources_in_gui:
-                # self.log("debug", f"Skipped duplicate source path: {path}") # Optional: less noise
-                continue
-
-            self.source_paths.append(path)
-            # GUI list is updated by GuiManager itself via its drop handler
-            added_count += 1
-            list_changed = True
-
-        if added_count > 0:
-            self.log("info", f"Added {added_count} source(s).")
-            # If list changed, reset resume state
-            if list_changed and self.state_manager.was_interrupted:
-                self.log("warning", "Source list modified, resume state cleared.")
-                self.state_manager.reset_for_new_run()
-            self._update_gui_state()
-
-    @Slot(list)
-    def handle_remove_sources(self, items_to_remove: List[str]) -> None:
-        """Handles the removal of selected sources from the list."""
-        removed_count = 0
-        list_changed = False
-        # items_to_remove contains the text of items removed from the GUI list
-        for path in items_to_remove:
-            path = os.path.normpath(path) # Normalize path separators
-            if path in self.source_paths:
-                try:
-                    self.source_paths.remove(path)
-                    removed_count += 1
-                    list_changed = True
-                except ValueError:
-                     self.log("warning", f"Path '{path}' not found in internal list during removal (concurrent modification?).")
-
-            else:
-                # This case should ideally not happen if GUI and internal list are synced
-                self.log("warning", f"Path '{path}' removed from GUI but not found in internal list.")
-                list_changed = True # Consider it a change anyway
-
-        if removed_count > 0:
-            self.log("info", f"Removed {removed_count} source(s).")
-
-        # If list changed, reset resume state
-        if list_changed and self.state_manager.was_interrupted:
-            self.log("warning", "Source list modified, resume state cleared.")
-            self.state_manager.reset_for_new_run()
-
-        self._update_gui_state()
-
-
-    def _can_run_or_resume(self) -> bool:
-        """Check if prerequisites for running or resuming rsync are met."""
-        # Need rsync, a destination, and either sources or the ability to resume
-        # Refresh source list from GUI before checking
-        self.source_paths = self.gui.get_all_sources()
-        self.destination_path = self.gui.get_destination()
-
-        can_resume = self.state_manager.can_resume(len(self.source_paths))
-        have_sources = bool(self.source_paths)
-
-        return self._rsync_available and bool(self.destination_path) and (have_sources or can_resume)
-
-
-    @Slot()
-    def start_or_resume_rsync(self) -> None:
-        """Validates inputs and starts/resumes the background RsyncRunner."""
+    # Rename, change signature, remove Slot decorator (called directly by Coordinator)
+    def start_rsync(self, sources: List[str], destination: str, options: Dict[str, bool]) -> None:
+        """Starts/resumes the background RsyncRunner with provided data."""
         # Refresh source list from GUI just in case
-        self.source_paths = self.gui.get_all_sources()
-        self.destination_path = self.gui.get_destination()
+        # Remove internal state reading and pre-checks - Coordinator does this now.
+        # Arguments (sources, destination, options) are passed in.
 
-        if not self._can_run_or_resume():
-             if not self._rsync_available:
-                 self.log("error", "Cannot run: rsync command not found or not working.")
-             elif not self.source_paths and not self.state_manager.can_resume(0):
-                 self.log("error", "Cannot run: No source files/folders added.")
-             elif not self.destination_path:
-                 self.log("error", "Cannot run: Destination path must be set.")
-             else:
-                 self.log("error", "Cannot run: Check sources, destination, and rsync availability.")
-             self._update_gui_state() # Ensure buttons reflect inability to run
-             return
+        # --- Determine start index for resume using AppState ---
+        is_resuming = self._app_state.can_resume()
+        start_index = self._app_state.get_resume_start_index()
 
-        # --- Determine start index for resume using StateManager ---
-        is_resuming = self.state_manager.can_resume(len(self.source_paths))
-        start_index = self.state_manager.get_resume_start_index()
-
-        if is_resuming:
+        if is_resuming: # Use the flag determined from AppState
             self.log("info", "-" * 20)
-            self.log("info", f"Resuming rsync process from source {start_index + 1}/{len(self.source_paths)}...")
+            self.log("info", f"Resuming rsync process from source {start_index + 1}/{len(sources)}...") # Use arg 'sources'
         else:
             # Starting fresh run - reset state manager and clear log
-            self.state_manager.reset_for_new_run()
-            self.gui.clear_log() # Clear log on fresh run
+            self._app_state.reset_resume_state() # Reset AppState
+            # Remove direct GUI manipulation
+            # self.gui.clear_log() # Log clearing should be handled based on state change if needed
             self.log("info", "-" * 20)
-            self.log("info", f"Starting rsync process for {len(self.source_paths)} source(s)...")
+            self.log("info", f"Starting rsync process for {len(sources)} source(s)...") # Use arg 'sources'
 
         # Reset was_interrupted state in StateManager as we are now starting/resuming
-        self.state_manager.was_interrupted = False # Explicitly reset interrupt flag for the new run
+        # AppState handles its internal 'was_interrupted' flag via setters/resetters
+        # self._app_state.resume_state["was_interrupted"] = False # Don't modify directly
 
         # --- Construct final rsync command options ---
-        selected_options = self.gui.get_rsync_options()
+        # Get options from AppState
+        # Use the 'options' argument passed to the method
+        selected_options = options
         final_rsync_command = ["rsync"]
 
         if selected_options["archive"]:
@@ -298,14 +201,16 @@ class RsyncController(QObject):
 
         # Create and start the runner
         self.runner = RsyncRunner(self.log_queue)
+        # Pass sources/destination read from AppState
         self.runner.run_all(
-            sources=self.source_paths,
-            destination=self.destination_path, # type: ignore (already checked it's not None)
+            sources=sources,         # Use arg 'sources'
+            destination=destination, # Use arg 'destination'
             start_index=start_index,
-            base_command=final_rsync_command # Pass the dynamically constructed command
+            base_command=final_rsync_command
         )
 
-        self._update_gui_state() # Update buttons immediately
+        # Coordinator will update state to RUNNING, triggering UI update
+        # self._update_gui_state()
         self.log_timer.start() # Start polling the queue
 
     @Slot()
@@ -318,7 +223,8 @@ class RsyncController(QObject):
             # StateManager.mark_interrupted() will be called in process_log_queue
         else:
             self.log("warning", "No rsync process is currently running to interrupt.")
-        self._update_gui_state() # May not change immediately, but good practice
+        # Coordinator will update state to INTERRUPTING, triggering UI update
+        # self._update_gui_state()
 
     @Slot()
     def process_log_queue(self) -> None:
@@ -341,11 +247,21 @@ class RsyncController(QObject):
                         if level != 'progress':
                              self.log(level, message_text)
                     elif msg_type == 'progress':
-                        current_index, total_count = payload
-                        # Update completion index via StateManager
-                        self.state_manager.update_completion_index(current_index)
-                        # Optionally update a progress bar or label here
-                        # self.log("debug", f"Progress: Item {current_index + 1}/{total_count}")
+                        # Example: payload might be (current_index, total_count, item_name, percent_str, speed_str, eta_str)
+                        # Adjust based on what RsyncRunner actually puts in the queue
+                        progress_data = {
+                            "current_item_index": payload[0],
+                            "total_items": payload[1],
+                            # Add more fields as available from RsyncRunner queue message
+                            # "current_item_name": payload[2] if len(payload) > 2 else None,
+                            # "overall_percent": payload[3] if len(payload) > 3 else 0,
+                            # "current_speed": payload[4] if len(payload) > 4 else "",
+                            # "eta": payload[5] if len(payload) > 5 else "",
+                        }
+                        # Update completion index via AppState
+                        self._app_state.update_completion_index(progress_data["current_item_index"], emit_signal=False) # Avoid double signal
+                        # Emit progress signal for coordinator
+                        self.progress_updated.emit(progress_data)
                     elif msg_type == 'error':
                         error_message, = payload
                         self.log("error", error_message)
@@ -355,31 +271,33 @@ class RsyncController(QObject):
                         was_interrupted_on_finish = (self.runner is not None and self.runner.interrupted)
 
                         # Mark interrupted in StateManager if applicable
-                        if not overall_success and was_interrupted_on_finish:
-                            self.state_manager.mark_interrupted()
+                        # AppState update will be handled by Coordinator based on rsync_finished signal
+                        # if not overall_success and was_interrupted_on_finish:
+                        #     self._app_state.mark_interrupted() # Let coordinator handle this
 
                         final_message: str = ""
                         log_level: str = "info"
 
-                        if self.state_manager.was_interrupted: # Check StateManager flag
-                            final_message = "Batch processing interrupted."
-                            log_level = "warning"
-                            # StateManager automatically keeps last_completed_index when marked interrupted
-                        elif overall_success:
-                            final_message = "Batch processing finished successfully."
-                            log_level = "success"
-                            self.state_manager.reset_for_new_run() # Reset state on full success
-                        else:
-                            # If it wasn't an interrupt, it was some other error
-                            final_message = "Batch processing finished with one or more errors."
-                            log_level = "error"
-                            # StateManager automatically keeps last_completed_index if not reset
+                        # Determine final status based on success/interrupt
+                        # This logic moves to the coordinator's _handle_rsync_finished slot
+                        # Here, just emit the signal
+                        self.runner = None # Clear runner instance *before* emitting finished signal? Or after? Let's clear after.
 
-                        self.log(log_level, final_message)
-                        self.runner = None # Clear the runner instance AFTER processing final state
+                        # Log the raw outcome
+                        if was_interrupted_on_finish:
+                             self.log("warning", "Rsync process interrupted by runner.")
+                        elif overall_success:
+                             self.log("success", "Rsync process finished successfully according to runner.")
+                        else:
+                             self.log("error", "Rsync process finished with errors according to runner.")
+
+                        # Emit the finished signal for the coordinator to handle state changes
+                        self.rsync_finished.emit(overall_success and not was_interrupted_on_finish)
+                        self.runner = None # Clear runner instance
                         if self.log_timer.isActive():
                             self.log_timer.stop() # Stop polling
-                        self._update_gui_state() # Update buttons for finished state
+                        # Coordinator handles state update via signal
+                        # self._update_gui_state()
                         return # Stop processing this cycle
 
                 except queue.Empty:
@@ -399,19 +317,13 @@ class RsyncController(QObject):
              if self.log_timer.isActive():
                 self.log_timer.stop() # Stop timer on unexpected error
              self.runner = None
-             self._update_gui_state()
+             # Coordinator handles state update via signal
+             # self._update_gui_state()
 
-
-    def _update_gui_state(self) -> None:
-        """Updates the GUI button states based on the application state."""
-        is_running = self.runner is not None and self.runner.is_running()
-        # Check can_resume *after* potential state changes in queue processing
-        can_resume = self.state_manager.can_resume(len(self.gui.get_all_sources())) # Use GUI list length
-        # Check if basic conditions to run are met
-        can_run_now = self._can_run_or_resume()
-
-        # Emit signal to update GUI on the main thread
-        self.update_gui_state_signal.emit(is_running, can_resume and can_run_now)
+    # Remove the _update_gui_state method entirely, as state changes
+    # are now driven by AppState updates triggered by the Coordinator.
+    # def _update_gui_state(self) -> None:
+    #     ...
 
 
     @Slot()

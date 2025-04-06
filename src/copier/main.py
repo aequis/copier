@@ -1,27 +1,32 @@
-# main_pyside.py
+# src/copier/main.py
 import sys
-from PySide6.QtWidgets import QApplication
-from copier.gui.manager import GuiManager
-from copier.rsync.controller import RsyncController
+
+# Import QApplication from the correct Qt binding
+try:
+    from PySide6.QtWidgets import QApplication
+except ImportError:
+    try:
+        from PyQt6.QtWidgets import QApplication
+    except ImportError:
+        print("Error: Neither PySide6 nor PyQt6 could be imported.")
+        print("Please install one of them (e.g., 'pip install PySide6')")
+        sys.exit(1)
+
+# Import the AppCoordinator
+from copier.coordinator import AppCoordinator
 
 if __name__ == "__main__":
+    # 1. Create the QApplication instance (required before any Qt objects)
+    # It's important this happens first.
     app = QApplication(sys.argv)
 
-    # Create the GUI Manager (View)
-    gui = GuiManager()
+    # 2. Create the AppCoordinator
+    # The coordinator will internally create AppState, GuiManager, and RsyncController
+    coordinator = AppCoordinator()
 
-    # Create the Controller and link it to the GUI
-    controller = RsyncController(gui=gui)
+    # 3. Run the application via the coordinator
+    # The coordinator's run() method shows the GUI and starts the event loop.
+    exit_code = coordinator.run()
 
-    # Optional: Connect main window close event to controller's quit handler
-    # This ensures the interrupt logic runs if the user closes the window
-    # Note: For this to work directly, GuiManager would need to inherit from QMainWindow
-    # or be embedded in one. A simpler approach is relying on the Exit button.
-    # If GuiManager is the top-level window, this might work:
-    # gui.closeEvent = controller.quit_app # Connect close event to quit logic
-
-    # Show the GUI
-    gui.show()
-
-    # Start the application event loop
-    sys.exit(app.exec())
+    # 4. Exit the application
+    sys.exit(exit_code)
