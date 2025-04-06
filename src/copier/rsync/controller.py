@@ -9,10 +9,10 @@ from PySide6 import QtCore
 from PySide6.QtCore import QObject, Signal, Slot, QTimer, QRunnable, QThreadPool
 from PySide6.QtWidgets import QApplication # For quit
 
-from gui_manager import GuiManager
-from rsync_runner import RsyncRunner
-from state_manager import StateManager
-from config import RSYNC_BASE_COMMAND
+from copier.gui.manager import GuiManager
+from copier.rsync.runner import RsyncRunner
+from copier.state_manager import StateManager
+from copier.config import RSYNC_BASE_COMMAND
 
 class RsyncController(QObject):
     """

@@ -1,8 +1,8 @@
 # main_pyside.py
 import sys
 from PySide6.QtWidgets import QApplication
-from gui_manager import GuiManager
-from rsync_controller import RsyncController
+from copier.gui.manager import GuiManager
+from copier.rsync.controller import RsyncController
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
