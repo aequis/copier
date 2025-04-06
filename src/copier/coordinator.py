@@ -3,11 +3,11 @@ from typing import Any, Optional, List, Dict
 
 # Import QObject from the correct Qt binding (handle potential PySide6/PyQt6 difference)
 try:
-    from PySide6.QtCore import QObject, Slot
-    from PySide6.QtWidgets import QApplication # Needed for main app lifecycle
+    from PySide6.QtCore import QObject, Slot, QTimer # Added QTimer for quit logic
+    from PySide6.QtWidgets import QApplication # Needed for main app lifecycle and quit logic
 except ImportError:
     try:
-        from PyQt6.QtCore import QObject, pyqtSlot as Slot
+        from PyQt6.QtCore import QObject, pyqtSlot as Slot, QTimer # Added QTimer
         from PyQt6.QtWidgets import QApplication
     except ImportError:
         # This case should ideally be handled earlier (e.g., in state_manager or main)
@@ -20,12 +20,16 @@ except ImportError:
 
 from copier.state_manager import AppState, AppStatus
 from copier.gui.manager import GuiManager
-from copier.rsync.controller import RsyncController
+# Updated imports for refactored rsync components
+from copier.rsync.manager import RsyncProcessManager
+from copier.rsync.environment import RsyncEnvironmentChecker
 
 class AppCoordinator(QObject):
     """
     Orchestrates the Copier application components.
-    Owns the AppState, GuiManager, and RsyncController instances.
+    Owns the AppState, GuiManager, RsyncEnvironmentChecker, and RsyncProcessManager instances.
+    Connects signals and slots between components.
+    Handles application lifecycle events like startup and shutdown.
     """
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -40,9 +44,10 @@ class AppCoordinator(QObject):
         # Let's keep it parentless for now, as it's the main window.
         self.gui_manager = GuiManager(app_state=self.app_state)
 
-        # 3. Instantiate the Rsync Controller
-        # Parent controller to coordinator for lifecycle.
-        self.rsync_controller = RsyncController(app_state=self.app_state, parent=self)
+        # 3. Instantiate Rsync Components
+        # Parent manager to coordinator for lifecycle.
+        self._rsync_checker = RsyncEnvironmentChecker() # No parent needed, simple utility
+        self._rsync_manager = RsyncProcessManager(app_state=self.app_state, parent=self)
 
         # --- Connections ---
         # Connect AppState changes directly to the GUI update slot
@@ -54,13 +59,13 @@ class AppCoordinator(QObject):
         self.gui_manager.sources_dropped.connect(self._handle_sources_dropped)
         self.gui_manager.destination_dropped.connect(self._handle_destination_dropped)
         self.gui_manager.options_changed.connect(self._handle_options_changed)
-        self.gui_manager.exit_clicked.connect(self._handle_exit_clicked) # Route exit through coordinator
+        self.gui_manager.exit_clicked.connect(self.quit_app) # Connect directly to the new quit_app method
 
-        # Connect Controller events to Coordinator slots
-        self.rsync_controller.log_signal.connect(self._handle_log)
-        self.rsync_controller.rsync_finished.connect(self._handle_rsync_finished)
-        self.rsync_controller.progress_updated.connect(self._handle_progress_updated)
-        self.rsync_controller.rsync_availability_checked.connect(self._handle_rsync_availability_checked)
+        # Connect RsyncProcessManager events to Coordinator slots
+        self._rsync_manager.log_signal.connect(self._handle_log)
+        self._rsync_manager.rsync_finished.connect(self._handle_rsync_finished)
+        self._rsync_manager.progress_updated.connect(self._handle_progress_updated)
+        # rsync_availability_checked signal is removed from manager
 
     def run(self) -> int:
         """Shows the main window and starts the application event loop."""
@@ -78,18 +83,36 @@ class AppCoordinator(QObject):
 
     @Slot()
     def _handle_run_resume_clicked(self) -> None:
-        """Handles the Run/Resume button click by checking state and calling controller."""
-        # 1. Check if we can run/resume using AppState
+        """
+        Handles the Run/Resume button click.
+        Checks rsync availability, validates state, and starts the process manager.
+        """
+        # 1. Perform Just-In-Time Rsync Environment Check
+        self._handle_log("info", "Checking rsync availability...")
+        available, message = self._rsync_checker.get_status()
+        self.app_state.set_rsync_available(available, emit_signal=False) # Update state silently first
+
+        if not available:
+            self._handle_log("error", f"Cannot run: {message}")
+            self.app_state.set_status(AppStatus.RSYNC_NOT_FOUND) # Update status and emit change
+            self.app_state.set_last_error(message) # Set error message
+            return
+
+        self._handle_log("success", "rsync command found.")
+
+        # 2. Check if we can run/resume using AppState (sources/destination)
         if not self.app_state.can_run_or_resume():
-            # Log appropriate error based on state
-            if not self.app_state.rsync_available:
-                self._handle_log("error", "Cannot run: rsync command not found or not working.")
-            elif not self.app_state.sources and not self.app_state.can_resume():
+            # Log appropriate error based on state (rsync availability already checked)
+            if not self.app_state.sources and not self.app_state.can_resume():
                 self._handle_log("error", "Cannot run: No source files/folders added.")
             elif not self.app_state.destination:
                 self._handle_log("error", "Cannot run: Destination path must be set.")
             else:
-                 self._handle_log("error", "Cannot run: Check sources, destination, and rsync availability.")
+                 # This case might indicate an unexpected state, log generic error
+                 self._handle_log("error", "Cannot run: Check sources and destination.")
+            # Ensure state reflects inability to run if needed (e.g., set back to READY)
+            if self.app_state.status not in [AppStatus.READY, AppStatus.INTERRUPTED, AppStatus.FINISHED_ERROR]:
+                 self.app_state.set_status(AppStatus.READY) # Or appropriate idle/error state
             return # Stop if cannot run
 
         # 2. Get necessary data from AppState
@@ -105,8 +128,8 @@ class AppCoordinator(QObject):
         # 3. Update state to RUNNING
         self.app_state.set_status(AppStatus.RUNNING)
 
-        # 4. Call the controller's start_rsync method with the data
-        self.rsync_controller.start_rsync(
+        # 4. Call the process manager's start_rsync method with the data
+        self._rsync_manager.start_rsync(
             sources=sources,
             destination=destination,
             options=options
@@ -115,9 +138,11 @@ class AppCoordinator(QObject):
     @Slot()
     def _handle_interrupt_clicked(self) -> None:
         """Handles the Interrupt button click."""
-        # Call controller's interrupt method.
-        self.rsync_controller.request_interrupt()
-        # Controller currently handles state updates internally/via signals.
+        # Call process manager's interrupt method.
+        self._rsync_manager.request_interrupt()
+        # Set state to INTERRUPTING immediately for UI feedback
+        if self.app_state.status == AppStatus.RUNNING:
+            self.app_state.set_status(AppStatus.INTERRUPTING)
 
     @Slot(list)
     def _handle_remove_sources_clicked(self, sources_to_remove: List[str]) -> None:
@@ -158,12 +183,31 @@ class AppCoordinator(QObject):
         # Update AppState
         self.app_state.set_options(options) # AppState setter handles resume reset
 
+    # Method _handle_exit_clicked removed, replaced by quit_app connected directly
+
+    # --- Application Lifecycle ---
+
     @Slot()
-    def _handle_exit_clicked(self) -> None:
-        """Handles the Exit button click."""
-        # For now, delegate to the controller's quit logic which handles interruption.
-        # This logic will eventually move here.
-        self.rsync_controller.quit_app()
+    def quit_app(self) -> None:
+        """
+        Handles application exit request.
+        Interrupts running rsync process if necessary before quitting.
+        """
+        if self._rsync_manager.is_running():
+            self._handle_log("warning", "Exit requested: Attempting to interrupt rsync first...")
+            self._rsync_manager.request_interrupt()
+            # Give interrupt a moment to process before quitting
+            # Use a timer to call _perform_quit after a short delay
+            QTimer.singleShot(500, self._perform_quit)
+        else:
+            self._perform_quit()
+
+    def _perform_quit(self) -> None:
+        """Actually quits the QApplication."""
+        self._handle_log("info", "Exiting application.")
+        app_instance = QApplication.instance()
+        if app_instance:
+            app_instance.quit()
 
     # --- Rsync Controller Event Handlers ---
 
@@ -194,15 +238,23 @@ class AppCoordinator(QObject):
             self.app_state.reset_resume_state() # Clear resume state on full success
         else:
             # If it failed, was it due to interruption or an actual error?
-            # We check the resume_state which should have been marked by the controller
-            # before emitting the signal (or AppState setter if logic moved).
-            # Let's assume AppState reflects interruption status correctly now.
-            if self.app_state.resume_state.get("was_interrupted", False):
+            # Check the manager's state directly or rely on AppState if it's updated reliably
+            # Let's check AppState's interruption flag which should be set by the manager's queue processing
+            # (Need to ensure manager.py's process_log_queue sets AppState correctly upon interruption finish)
+
+            # Assuming AppState.was_interrupted reflects the state accurately:
+            if self.app_state.was_interrupted:
                  self.app_state.set_status(AppStatus.INTERRUPTED)
-                 # Keep resume state as is
+                 # Keep resume state as is for potential resume
             else:
                  self.app_state.set_status(AppStatus.FINISHED_ERROR)
                  # Keep resume state in case user wants to retry/resume failed items
+                 # Log the last error if available
+                 last_error = self.app_state.last_error
+                 if last_error:
+                     self._handle_log("error", f"Rsync finished with error: {last_error}")
+                 else:
+                     self._handle_log("error", "Rsync finished with an unspecified error.")
 
     @Slot(dict)
     def _handle_progress_updated(self, progress_data: Dict[str, Any]) -> None:
@@ -211,21 +263,7 @@ class AppCoordinator(QObject):
         self.app_state.update_progress(progress_data)
         # AppState will emit state_changed, triggering UI update if needed
 
-    @Slot(bool)
-    def _handle_rsync_availability_checked(self, available: bool) -> None:
-        """Handles the result of the initial rsync availability check."""
-        self.app_state.set_rsync_available(available, emit_signal=False) # Update state
-        if available:
-            # If rsync is found, move to READY state (assuming not running yet)
-            if self.app_state.status == AppStatus.CHECKING_RSYNC or self.app_state.status == AppStatus.IDLE:
-                 self.app_state.set_status(AppStatus.READY)
-        else:
-            # If rsync not found, set status to RSYNC_NOT_FOUND
-            self.app_state.set_status(AppStatus.RSYNC_NOT_FOUND)
-            self.app_state.set_last_error("rsync command not found in PATH.", emit_signal=False) # Set error message
-
-        # Explicitly emit state_changed now that all related state is updated
-        self.app_state.state_changed.emit()
-
+    # Method _handle_rsync_availability_checked removed
+    # The check is now performed within _handle_run_resume_clicked
 
     # --- Utility Methods (if needed) ---
