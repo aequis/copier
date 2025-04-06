@@ -6,14 +6,10 @@ import subprocess
 from typing import List, Optional, Tuple, Any, Dict
 import queue
 
-from PySide6.QtCore import QObject, Signal, Slot, QTimer # QThreadPool, QRunnable not used directly here
+from PySide6.QtCore import QObject, Signal, Slot, QTimer
 
-# Removed QApplication import as quit logic is moved
-
-# from copier.gui.manager import GuiManager # Removed
 from copier.rsync.runner import RsyncRunner
 from copier.state_manager import AppState
-# from copier.config import RSYNC_BASE_COMMAND # Base command options handled by builder
 from .command import RsyncCommandBuilder # Import the new builder
 
 class RsyncProcessManager(QObject):
@@ -29,7 +25,6 @@ class RsyncProcessManager(QObject):
     log_signal = Signal(str, str)           # level, message
     rsync_finished = Signal(bool)           # success: True/False
     progress_updated = Signal(dict)         # Dictionary with progress details
-    # rsync_availability_checked signal removed (handled by Coordinator/EnvironmentChecker)
 
     def __init__(self, app_state: AppState, parent: Optional[QObject] = None):
         """
@@ -41,11 +36,8 @@ class RsyncProcessManager(QObject):
         """
         super().__init__(parent)
         self._app_state = app_state # Store the AppState instance
-        # self.gui = gui # No longer needed
         self.runner: Optional[RsyncRunner] = None
         self.log_queue: queue.Queue[Tuple[str, Any]] = queue.Queue()
-        # Remove internal state variables - read from AppState instead
-        # Internal state variables removed - read from AppState or passed as args
 
         self._command_builder = RsyncCommandBuilder() # Instantiate the command builder
 
@@ -54,16 +46,7 @@ class RsyncProcessManager(QObject):
         self.log_timer.timeout.connect(self.process_log_queue)
         self.log_timer.setInterval(100) # Check queue every 100ms
 
-        # Remove GUI signal connections - handled by Coordinator
-        # self._connect_gui_signals()
-        # Remove direct log connection - handled by Coordinator
-        # self.log_signal.connect(self.gui.update_log)
-        # Remove direct connection to gui.set_button_states
-        # self.update_gui_state_signal.connect(self.gui.set_button_states)
-
         self.log("info", "RsyncProcessManager initialized.")
-        # Base command options logging removed (builder handles options)
-        # Rsync availability check removed (handled by Coordinator)
 
     def log(self, level: str, message: str) -> None:
         """Emit a signal to log messages to the GUI."""
@@ -71,22 +54,6 @@ class RsyncProcessManager(QObject):
         # (though in this design, most logs originate from the controller or queue processor)
         self.log_signal.emit(level, message)
 
-    # Method check_rsync_availability removed (responsibility moved to RsyncEnvironmentChecker)
-
-    # Method _add_git_to_path_windows removed (responsibility moved to RsyncEnvironmentChecker)
-
-    # GUI handler slots removed (handled by Coordinator)
-    # @Slot(str)
-    # def handle_destination_dropped(self, path: str) -> None: ...
-    # @Slot(list)
-    # def handle_sources_dropped(self, dropped_paths: List[str]) -> None: ...
-    # @Slot(list)
-    # def handle_remove_sources(self, items_to_remove: List[str]) -> None: ...
-
-    # Remove _can_run_or_resume method - logic moved to Coordinator/AppState
-
-    # Rename, change signature, remove Slot decorator (called directly by Coordinator)
-    # No Slot decorator needed, called directly by Coordinator
     def start_rsync(self, sources: List[str], destination: str, options: Dict[str, bool]) -> None:
         """
         Starts or resumes the background RsyncRunner.
@@ -96,10 +63,6 @@ class RsyncProcessManager(QObject):
             destination: Destination path.
             options: Dictionary of rsync options.
         """
-        # Refresh source list from GUI just in case
-        # Remove internal state reading and pre-checks - Coordinator does this now.
-        # Arguments (sources, destination, options) are passed in.
-
         # --- Determine start index for resume using AppState ---
         is_resuming = self._app_state.can_resume()
         start_index = self._app_state.get_resume_start_index()
@@ -110,14 +73,8 @@ class RsyncProcessManager(QObject):
         else:
             # Starting fresh run - reset state manager and clear log
             self._app_state.reset_resume_state() # Reset AppState
-            # Remove direct GUI manipulation
-            # self.gui.clear_log() # Log clearing should be handled based on state change if needed
             self.log("info", "-" * 20)
             self.log("info", f"Starting rsync process for {len(sources)} source(s)...") # Use arg 'sources'
-
-        # Reset was_interrupted state in StateManager as we are now starting/resuming
-        # AppState handles its internal 'was_interrupted' flag via setters/resetters
-        # self._app_state.resume_state["was_interrupted"] = False # Don't modify directly
 
         # --- Construct final rsync command options using the builder ---
         final_rsync_command = self._command_builder.build_command(options)
@@ -137,7 +94,6 @@ class RsyncProcessManager(QObject):
         # self._update_gui_state()
         self.log_timer.start() # Start polling the queue
 
-    # No Slot decorator needed, called directly by Coordinator
     def request_interrupt(self) -> None:
         """Requests the RsyncRunner to interrupt the current process."""
         if self.runner and self.runner.is_running():
@@ -150,7 +106,6 @@ class RsyncProcessManager(QObject):
         # Coordinator will update state to INTERRUPTING, triggering UI update
         # self._update_gui_state()
 
-    # This remains connected to the QTimer's timeout signal
     @Slot()
     def process_log_queue(self) -> None:
         """Processes messages from the RsyncRunner's queue."""
@@ -244,14 +199,6 @@ class RsyncProcessManager(QObject):
              self.runner = None
              # Coordinator handles state update via signal
              # self._update_gui_state()
-
-    # Method _update_gui_state removed (handled by Coordinator/AppState)
-
-    # Method quit_app removed (responsibility moved to Coordinator)
-
-    # Method _perform_quit removed (responsibility moved to Coordinator)
-
-    # Method closeEvent removed (responsibility moved to Coordinator/main)
 
     # Add helper method for Coordinator to check if running
     def is_running(self) -> bool:

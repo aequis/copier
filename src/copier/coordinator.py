@@ -3,15 +3,13 @@ from typing import Any, Optional, List, Dict
 
 # Import QObject from the correct Qt binding (handle potential PySide6/PyQt6 difference)
 try:
-    from PySide6.QtCore import QObject, Slot, QTimer # Added QTimer for quit logic
-    from PySide6.QtWidgets import QApplication # Needed for main app lifecycle and quit logic
+    from PySide6.QtCore import QObject, Slot, QTimer 
+    from PySide6.QtWidgets import QApplication 
 except ImportError:
     try:
-        from PyQt6.QtCore import QObject, pyqtSlot as Slot, QTimer # Added QTimer
+        from PyQt6.QtCore import QObject, pyqtSlot as Slot, QTimer 
         from PyQt6.QtWidgets import QApplication
     except ImportError:
-        # This case should ideally be handled earlier (e.g., in state_manager or main)
-        # but added here for robustness during refactoring.
         print("Error: Neither PySide6 nor PyQt6 could be imported.")
         print("Please install one of them (e.g., 'pip install PySide6')")
         import sys
@@ -20,7 +18,6 @@ except ImportError:
 
 from copier.state_manager import AppState, AppStatus
 from copier.gui.manager import GuiManager
-# Updated imports for refactored rsync components
 from copier.rsync.manager import RsyncProcessManager
 from copier.rsync.environment import RsyncEnvironmentChecker
 
@@ -65,7 +62,9 @@ class AppCoordinator(QObject):
         self._rsync_manager.log_signal.connect(self._handle_log)
         self._rsync_manager.rsync_finished.connect(self._handle_rsync_finished)
         self._rsync_manager.progress_updated.connect(self._handle_progress_updated)
-        # rsync_availability_checked signal is removed from manager
+
+        self.update_rsync_status()
+        
 
     def run(self) -> int:
         """Shows the main window and starts the application event loop."""
@@ -79,15 +78,8 @@ class AppCoordinator(QObject):
             print("Error: QApplication instance not found.")
             return 1 # Indicate error
 
-    # --- GUI Action Handlers ---
-
-    @Slot()
-    def _handle_run_resume_clicked(self) -> None:
-        """
-        Handles the Run/Resume button click.
-        Checks rsync availability, validates state, and starts the process manager.
-        """
-        # 1. Perform Just-In-Time Rsync Environment Check
+    def update_rsync_status(self) -> None:
+        # 1. Perform Rsync Environment Check
         self._handle_log("info", "Checking rsync availability...")
         available, message = self._rsync_checker.get_status()
         self.app_state.set_rsync_available(available, emit_signal=False) # Update state silently first
@@ -97,9 +89,17 @@ class AppCoordinator(QObject):
             self.app_state.set_status(AppStatus.RSYNC_NOT_FOUND) # Update status and emit change
             self.app_state.set_last_error(message) # Set error message
             return
-
+        
         self._handle_log("success", "rsync command found.")
 
+    # --- GUI Action Handlers ---
+
+    @Slot()
+    def _handle_run_resume_clicked(self) -> None:
+        """
+        Handles the Run/Resume button click.
+        Checks rsync availability, validates state, and starts the process manager.
+        """
         # 2. Check if we can run/resume using AppState (sources/destination)
         if not self.app_state.can_run_or_resume():
             # Log appropriate error based on state (rsync availability already checked)

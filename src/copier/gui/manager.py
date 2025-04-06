@@ -316,5 +316,3 @@ class GuiManager(QWidget):
 
         # Note: This replaces the logic previously in set_button_states
         # We might remove set_button_states later.
-
-# Removed __main__ block - testing should be done via unit tests or running the full app

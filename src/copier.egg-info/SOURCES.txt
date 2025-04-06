@@ -1,6 +1,5 @@
 pyproject.toml
 src/copier/__init__.py
-src/copier/config.py
 src/copier/coordinator.py
 src/copier/main.py
 src/copier/state_manager.py
@@ -12,5 +11,7 @@ src/copier/gui/__init__.py
 src/copier/gui/manager.py
 src/copier/gui/widgets.py
 src/copier/rsync/__init__.py
-src/copier/rsync/controller.py
+src/copier/rsync/command.py
+src/copier/rsync/environment.py
+src/copier/rsync/manager.py
 src/copier/rsync/runner.py
